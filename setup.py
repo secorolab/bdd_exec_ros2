@@ -1,3 +1,5 @@
+from glob import glob
+from os.path import join as os_join
 from setuptools import find_packages, setup
 
 package_name = "bdd_exec_ros2"
@@ -7,8 +9,13 @@ setup(
     version="0.0.0",
     packages=find_packages(exclude=["test"]),
     data_files=[
-        ("share/ament_index/resource_index/packages", ["resource/" + package_name]),
-        ("share/" + package_name, ["package.xml"]),
+        (
+            os_join("share", "ament_index", "resource_index", "packages"),
+            [os_join("resource", package_name)],
+        ),
+        (os_join("share", package_name), ["package.xml"]),
+        (os_join("share", package_name, "config"), glob("config/*.yaml")),
+        (os_join("share", package_name, "launch"), glob("launch/*")),
     ],
     package_data={"": ["py.typed"]},
     install_requires=["setuptools"],
@@ -23,6 +30,9 @@ setup(
         ],
     },
     entry_points={
-        "console_scripts": [],
+        "console_scripts": [
+            "bdd_coordination_node = bdd_exec_ros2.nodes.bdd_coordination_node:main",
+            "mockup_behaviour_node = bdd_exec_ros2.nodes.mockup_behaviour_node:main",
+        ],
     },
 )

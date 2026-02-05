@@ -1,0 +1,8 @@
+/bdd/test_coordinator:
+  ros__parameters:
+    event_topic: "/bdd/events"
+    use_sim_time: False
+/bdd/mockup_behaviour:
+  ros__parameters:
+    event_topic: "/bdd/events"
+    use_sim_time: False
