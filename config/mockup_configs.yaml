@@ -8,3 +8,5 @@
     use_sim_time: False
     loop_duration: 0.01       # duration in seconds for step events
     heartbeat_duration: 0.5   # duration in seconds for callback
+    delay_lower: 1.1          # duration in seconds for callback
+    delay_upper: 1.7          # duration in seconds for callback

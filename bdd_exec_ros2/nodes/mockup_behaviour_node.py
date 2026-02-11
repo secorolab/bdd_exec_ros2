@@ -45,7 +45,7 @@ class UserData:
     placing: bool
     succeeded: Trinary
 
-    def __init__(self, delay_lower=2.0, delay_upper=4.0) -> None:
+    def __init__(self, delay_lower, delay_upper) -> None:
         self.start_time = time.time()
         self.perceive_delay = random_in_range(delay_lower, delay_upper)
         self.approach_delay = random_in_range(delay_lower, delay_upper)
@@ -124,6 +124,8 @@ class MockupBhvNode(Node):
     event_topic: str
     loop_duration: float
     heartbeat_duration: float
+    delay_lower: float
+    delay_upper: float
     server_name: str
     _action_server: ActionServer
 
@@ -133,6 +135,8 @@ class MockupBhvNode(Node):
         self.declare_parameter("event_topic", "")
         self.declare_parameter("loop_duration", 0.01)
         self.declare_parameter("heartbeat_duration", 0.5)
+        self.declare_parameter("delay_lower", 2.0)
+        self.declare_parameter("delay_upper", 4.0)
         self.declare_parameter("bhv_server_name", "bhv_server")
 
         use_sim_time = self.get_parameter("use_sim_time").value
@@ -148,11 +152,23 @@ class MockupBhvNode(Node):
             self.loop_duration > 0 and self.heartbeat_duration > 0
         ), f"Negative duration: hearbeat={self.heartbeat_duration}, loop={self.loop_duration}"
         assert self.loop_duration * 3 < self.heartbeat_duration, (
-            f"Hearbeat duration ({self.heartbeat_duration}) must be at least"
-            f" 3 times loop duration ({self.loop_duration})"
+            f"Hearbeat duration (hb={self.heartbeat_duration}) must be at least"
+            f" 3 times loop duration (loop={self.loop_duration})"
         )
         self.get_logger().info(
             f"Duration: hearbeat={self.heartbeat_duration}, loop={self.loop_duration}"
+        )
+
+        self.delay_lower = self.get_parameter("delay_lower").value
+        self.delay_upper = self.get_parameter("delay_upper").value
+        assert (
+            self.delay_lower > 2 * self.heartbeat_duration
+        ), f"Lower range for state delay (lower={self.delay_lower}) must be at least 2 times the hearbheat duration (hb={self.heartbeat_duration})"
+        assert (
+            self.delay_upper > self.delay_lower
+        ), f"Upper range for state delay (upper={self.delay_upper}) must be greater than lower range (lower={self.delay_lower})"
+        self.get_logger().info(
+            f"State duration range: [{self.delay_lower}, {self.delay_upper}]"
         )
 
         self.server_name = self.get_parameter("bhv_server_name").value
@@ -163,7 +179,7 @@ class MockupBhvNode(Node):
         )
 
         self._action_server = ActionServer(
-            self, Behaviour, self.server_name, self.exec_cb
+            self, Behaviour, self.server_name, execute_callback=self.exec_cb
         )
 
     def exec_cb(self, goal_handle):
@@ -171,33 +187,31 @@ class MockupBhvNode(Node):
         feedback = Behaviour.Feedback()
 
         pp_fsm = create_fsm()
-        ud = UserData()
+        ud = UserData(delay_lower=self.delay_lower, delay_upper=self.delay_upper)
 
-        start = time.time()
-        loop_timeout = start + self.loop_duration
-        heartbeat_timeout = start + self.heartbeat_duration
+        now = time.time()
+        loop_timeout = now + self.loop_duration
+        heartbeat_timeout = now + self.heartbeat_duration
         while True:
+            response.result = ud.succeeded
             if pp_fsm.current_state_index == StateID.S_EXIT:
                 goal_handle.succeed()
-                response.result = ud.succeeded
-                break
+                return response
 
             if goal_handle.is_cancel_requested:
+                self.get_logger().info(
+                    f"Goal canceled at {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(now))}"
+                )
                 produce_event(
                     event_data=pp_fsm.event_data, event_index=EventID.E_PREEMPTED
                 )
-
-            # execute behaviour
-            fsm_mockup_bhv(fsm=pp_fsm, ud=ud)
-
-            # State transitions
-            reconfig_event_buffers(pp_fsm.event_data)
-            fsm_step(pp_fsm)
+                goal_handle.canceled()
+                return response
 
             # Ensure loop rate & produce step event
             now = time.time()
-            while now < loop_timeout:
-                now = time.time()
+            if now < loop_timeout:
+                continue
             while loop_timeout < now:
                 loop_timeout += self.loop_duration
             produce_event(pp_fsm.event_data, EventID.E_STEP)
@@ -210,6 +224,13 @@ class MockupBhvNode(Node):
                     f"current state: {StateID(pp_fsm.current_state_index).name}"
                 )
                 goal_handle.publish_feedback(feedback)
+
+            # execute behaviour
+            fsm_mockup_bhv(fsm=pp_fsm, ud=ud)
+
+            # State transitions
+            reconfig_event_buffers(pp_fsm.event_data)
+            fsm_step(pp_fsm)
 
         return response
 
