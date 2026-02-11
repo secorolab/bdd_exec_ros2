@@ -6,3 +6,5 @@
   ros__parameters:
     event_topic: "/bdd/events"
     use_sim_time: False
+    loop_duration: 0.01       # duration in seconds for step events
+    heartbeat_duration: 0.5   # duration in seconds for callback

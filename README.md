@@ -5,8 +5,17 @@
 - Python packages:
   + [rdf-utils](https://github.com/minhnh/rdf-utils)
   + [bdd-dsl](https://github.com/minhnh/bdd-dsl)
+  + [coord-dsl](https://github.com/secorolab/coord-dsl)
 - ROS packages:
   + [minhnh/bdd_ros2_interfaces](https://github.com/minhnh/bdd_ros2_interfaces)
+
+## Nodes
+
+### Mockup behaviour
+
+The [FSM](./models/pickplace.fsm) for the pick-place behaviour generates to the [Python implementation](./bdd_exec_ros2/behaviours/fsm_pickplace.py)
+with [coord-dsl](https://github.com/secorolab/coord-dsl).
+The package is also required to execute the mockup behaviour node.
 
 ## Virtual environment setup with ROS2
 

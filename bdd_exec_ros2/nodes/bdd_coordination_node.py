@@ -13,9 +13,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
-
-import time
+# from rdflib import URIRef
 import rclpy
 from rclpy.node import Node
 from rclpy.executors import ExternalShutdownException
@@ -23,6 +21,7 @@ from bdd_ros2_interfaces.msg import Event
 
 
 __DEFAULT_NODE_NAME = "test_coordinator"
+# __SCR_START_EVT_URI = URIRef("https://my.url/models/evt_scr_start")
 
 
 class BddCoordNode(Node):
@@ -43,11 +42,16 @@ class BddCoordNode(Node):
             msg_type=Event, topic=self.event_topic, qos_profile=10
         )
 
-        time.sleep(1)
-        test_msg = Event()
-        test_msg.stamp = self.get_clock().now().to_msg()
-        test_msg.uri = "https://my.url/models/evt_scr_start"
-        self.evt_pub.publish(msg=test_msg)
+        self.evt_sub = self.create_subscription(
+            msg_type=Event,
+            topic=self.event_topic,
+            callback=self.evt_sub_cb,
+            qos_profile=10,
+        )
+
+    def evt_sub_cb(self, msg: Event):
+        self.get_logger().info(f"{msg.stamp.sec}: {msg.uri}")
+        # evt = URIRef(msg.uri)
 
 
 def main(args=None):
