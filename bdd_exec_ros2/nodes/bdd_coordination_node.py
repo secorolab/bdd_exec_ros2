@@ -13,36 +13,55 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-# from rdflib import URIRef
+from bdd_dsl.models.urirefs import URI_BHV_PRED_TARGET_OBJ
+from bdd_ros2_interfaces.action import Behaviour
 import rclpy
+from rclpy.action import ActionClient
 from rclpy.node import Node
+from rclpy.publisher import Publisher
+from rclpy.subscription import Subscription
 from rclpy.executors import ExternalShutdownException
-from bdd_ros2_interfaces.msg import Event
+from bdd_ros2_interfaces.msg import Event, ParamValue
+from rdflib import Namespace
 
 
+TEST_NS = Namespace("https://secorolab.github.io/models/test/")
 __DEFAULT_NODE_NAME = "test_coordinator"
 # __SCR_START_EVT_URI = URIRef("https://my.url/models/evt_scr_start")
 
 
 class BddCoordNode(Node):
-    def __init__(self, node_name: str) -> None:
+    timeout_sec: float
+    server_name: str
+    _action_client: ActionClient
+    _evt_pub: Publisher
+    _evt_sub: Subscription
+
+    def __init__(self, node_name: str, timeout_sec: float = 5.0) -> None:
         super().__init__(node_name)
+        self.timeout_sec = timeout_sec
+
+        self.declare_parameter("bhv_server_name", "bhv_server")
         self.declare_parameter("event_topic", "")
 
         use_sim_time = self.get_parameter("use_sim_time").value
         self.get_logger().info(f"use_sim_time: {use_sim_time}")
 
+        # Behaviour action server
+        self.server_name = self.get_parameter("bhv_server_name").value
+        self.get_logger().info(f"Behaviour server name: {self.server_name}")
+        self._action_client = ActionClient(self, Behaviour, self.server_name)
+
+        # Topic for events
         self.event_topic = self.get_parameter("event_topic").value
-        assert (
-            self.event_topic is not None
-        ), f"{self.get_name()}: no 'event_topic' param specified"
+        assert self.event_topic, f"{self.get_name()}: no 'event_topic' param specified"
         self.get_logger().info(f"Event topic: {self.event_topic}")
 
-        self.evt_pub = self.create_publisher(
+        self._evt_pub = self.create_publisher(
             msg_type=Event, topic=self.event_topic, qos_profile=10
         )
 
-        self.evt_sub = self.create_subscription(
+        self._evt_sub = self.create_subscription(
             msg_type=Event,
             topic=self.event_topic,
             callback=self.evt_sub_cb,
@@ -51,7 +70,38 @@ class BddCoordNode(Node):
 
     def evt_sub_cb(self, msg: Event):
         self.get_logger().info(f"{msg.stamp.sec}: {msg.uri}")
-        # evt = URIRef(msg.uri)
+        goal_msg = Behaviour.Goal()
+        param = ParamValue()
+        param.param_rel_uri = URI_BHV_PRED_TARGET_OBJ.toPython()
+        param.param_val_uris = [TEST_NS["cube"].toPython()]
+        goal_msg.parameters = [param]
+        self._action_client.wait_for_server(timeout_sec=self.timeout_sec)
+        send_goal_future = self._action_client.send_goal_async(
+            goal_msg, feedback_callback=self.bhv_feedback_cb
+        )
+
+        send_goal_future.add_done_callback(self.bhv_goal_resp_cb)
+
+    def bhv_goal_resp_cb(self, future):
+        goal_handle = future.result()
+
+        if not goal_handle.accepted:
+            self.get_logger().info("Goal rejected :(")
+            return
+
+        self.get_logger().info("Goal accepted :)")
+
+        self._get_result_future = goal_handle.get_result_async()
+
+        self._get_result_future.add_done_callback(self.bhv_result_cb)
+
+    def bhv_feedback_cb(self, feedback_msg):
+        feedback = feedback_msg.feedback
+        self.get_logger().info("Behaviour feedback: {0}".format(feedback.status))
+
+    def bhv_result_cb(self, future):
+        result = future.result().result
+        self.get_logger().info("Result: {0}".format(result.result))
 
 
 def main(args=None):

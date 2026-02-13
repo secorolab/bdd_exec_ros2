@@ -15,10 +15,9 @@
 # limitations under the License.
 import time
 from random import random
-from rdflib import URIRef
 import rclpy
 from rclpy.node import Node
-from rclpy.action import ActionServer
+from rclpy.action import ActionServer, CancelResponse
 from rclpy.executors import ExternalShutdownException
 from coord_dsl.fsm import FSMData, fsm_step, produce_event
 from coord_dsl.event_loop import reconfig_event_buffers
@@ -28,7 +27,7 @@ from bdd_exec_ros2.behaviours.fsm_pickplace import EventID, StateID, create_fsm
 
 
 __DEFAULT_NODE_NAME = "mockup_behaviour"
-__SCR_START_EVT_URI = URIRef("https://my.url/models/evt_scr_start")
+# __SCR_START_EVT_URI = URIRef("https://my.url/models/evt_scr_start")
 
 
 def random_in_range(lower, upper):
@@ -142,10 +141,6 @@ class MockupBhvNode(Node):
         use_sim_time = self.get_parameter("use_sim_time").value
         self.get_logger().info(f"use_sim_time: {use_sim_time}")
 
-        self.event_topic = self.get_parameter("event_topic").value
-        assert self.event_topic, f"{self.get_name()}: no 'event_topic' param specified"
-        self.get_logger().info(f"Event topic: {self.event_topic}")
-
         self.loop_duration = self.get_parameter("loop_duration").value
         self.heartbeat_duration = self.get_parameter("heartbeat_duration").value
         assert (
@@ -174,17 +169,34 @@ class MockupBhvNode(Node):
         self.server_name = self.get_parameter("bhv_server_name").value
         self.get_logger().info(f"Behaviour server name: {self.server_name}")
 
+        self._action_server = ActionServer(
+            self,
+            Behaviour,
+            self.server_name,
+            self.execute_callback,
+            cancel_callback=self.cancel_callback,
+        )
+
+        self.event_topic = self.get_parameter("event_topic").value
+        assert self.event_topic, f"{self.get_name()}: no 'event_topic' param specified"
+        self.get_logger().info(f"Event topic: {self.event_topic}")
+
         self.evt_pub = self.create_publisher(
             msg_type=Event, topic=self.event_topic, qos_profile=10
         )
 
-        self._action_server = ActionServer(
-            self, Behaviour, self.server_name, execute_callback=self.exec_cb
-        )
+    def cancel_callback(self, goal_handle):
+        self.get_logger().info("Canceling goal...")
+        return CancelResponse.ACCEPT
 
-    def exec_cb(self, goal_handle):
+    def execute_callback(self, goal_handle):
         response = Behaviour.Result()
         feedback = Behaviour.Feedback()
+        self.get_logger().info("Received goal:")
+        for param_val in goal_handle.request.parameters:
+            self.get_logger().info(f"- Parameter relation: {param_val.param_rel_uri}")
+            for val_uri in param_val.param_val_uris:
+                self.get_logger().info(f"  + Parameter value: {val_uri}")
 
         pp_fsm = create_fsm()
         ud = UserData(delay_lower=self.delay_lower, delay_upper=self.delay_upper)
@@ -193,6 +205,14 @@ class MockupBhvNode(Node):
         loop_timeout = now + self.loop_duration
         heartbeat_timeout = now + self.heartbeat_duration
         while True:
+            # Ensure loop rate & produce step event
+            now = time.time()
+            if now < loop_timeout:
+                continue
+            while loop_timeout < now:
+                loop_timeout += self.loop_duration
+            produce_event(pp_fsm.event_data, EventID.E_STEP)
+
             response.result = ud.succeeded
             if pp_fsm.current_state_index == StateID.S_EXIT:
                 goal_handle.succeed()
@@ -202,19 +222,11 @@ class MockupBhvNode(Node):
                 self.get_logger().info(
                     f"Goal canceled at {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(now))}"
                 )
-                produce_event(
-                    event_data=pp_fsm.event_data, event_index=EventID.E_PREEMPTED
-                )
+                # produce_event(
+                #     event_data=pp_fsm.event_data, event_index=EventID.E_PREEMPTED
+                # )
                 goal_handle.canceled()
                 return response
-
-            # Ensure loop rate & produce step event
-            now = time.time()
-            if now < loop_timeout:
-                continue
-            while loop_timeout < now:
-                loop_timeout += self.loop_duration
-            produce_event(pp_fsm.event_data, EventID.E_STEP)
 
             # Heartbeat timer for callback message
             if heartbeat_timeout < now:

@@ -83,39 +83,62 @@ class TestBehaviourActionServer(unittest.TestCase):
         self.assertTrue(
             self.client.wait_for_server(timeout_sec=5.0), "Action server not available"
         )
+        self.goal = Behaviour.Goal()
+        param = ParamValue()
+        param._param_rel_uri = URI_BHV_PRED_TARGET_OBJ.toPython()
+        param.param_val_uris = [TEST_NS["cube"].toPython()]
+        self.goal.parameters = [param]
 
     def tearDown(self):
         self.node.destroy_node()
 
     def test_goal_succeeds(self):
-        # Create goal
-        goal_msg = Behaviour.Goal()
-
-        param = ParamValue()
-        param._param_rel_uri = URI_BHV_PRED_TARGET_OBJ.toPython()
-        param.param_val_uris = [TEST_NS["cube"].toPython()]
-        goal_msg.parameters = [param]
-
         # Send goal
-        send_goal_future = self.client.send_goal_async(goal_msg)
+        send_goal_future = self.client.send_goal_async(self.goal)
 
         rclpy.spin_until_future_complete(self.node, send_goal_future)
         goal_handle = send_goal_future.result()
 
-        self.assertIsNotNone(goal_handle)
+        assert goal_handle is not None
         self.assertTrue(goal_handle.accepted, "Goal was rejected")
 
         # Wait for result
         get_result_future = goal_handle.get_result_async()
         rclpy.spin_until_future_complete(self.node, get_result_future)
 
-        result = get_result_future.result().result
+        resp_msg = get_result_future.result()
+        assert resp_msg is not None
+        result = resp_msg.result
 
-        # ----------------------------------------------------------------------
-        # Assertions
-        # ----------------------------------------------------------------------
         self.assertEqual(
             result.result.value,
             Trinary.TRUE,
-            msg=f"unexpected result value: {result.result.value} != {Trinary.TRUE}",
+            msg=f"unexpected result value for success test: {result.result.value} != {Trinary.TRUE}",
+        )
+
+    def test_goal_cancel(self):
+        # Send goal
+        send_goal_future = self.client.send_goal_async(self.goal)
+
+        rclpy.spin_until_future_complete(self.node, send_goal_future)
+        goal_handle = send_goal_future.result()
+
+        assert goal_handle is not None
+        self.assertTrue(goal_handle.accepted, "Goal was rejected")
+
+        cancel_future = goal_handle.cancel_goal_async()
+        rclpy.spin_until_future_complete(self.node, cancel_future)
+        result_future = goal_handle.get_result_async()
+        rclpy.spin_until_future_complete(self.node, result_future)
+        resp_msg = result_future.result()
+        assert resp_msg is not None
+        result = resp_msg.result
+
+        # TODO(minhnh) cancel never seems to be
+        is_unknown = result.result.value == Trinary.UNKNOWN
+        print(f"Canceled result: {result.result}, is unknown: {is_unknown}")
+        self.assertEqual(
+            result.result.value,
+            Trinary.UNKNOWN,
+            msg=f"unexpected result value for cancelled goal test: {result.result.value} != {Trinary.UNKNOWN}",
         )
