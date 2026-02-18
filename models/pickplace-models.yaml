@@ -1,0 +1,13 @@
+- path: "https://secorolab.github.io/models/acceptance-criteria/bdd/environments/secorolab.env.json"
+  format: "json-ld"
+- path:     "https://secorolab.github.io/models/acceptance-criteria/bdd/agents/isaac-sim.agn.json"
+  format: "json-ld"
+- path:    "https://secorolab.github.io/models/acceptance-criteria/bdd/scenes/secorolab-env.scene.json"
+  format: "json-ld"
+- path:    "https://secorolab.github.io/models/acceptance-criteria/bdd/scenes/isaac-agents.scene.json"
+  format: "json-ld"
+- path:    "https://secorolab.github.io/models/acceptance-criteria/bdd/templates/pickplace.tmpl.json"
+  format: "json-ld"
+- path:    "https://secorolab.github.io/models/acceptance-criteria/bdd/pickplace-secorolab-isaac.var.json"
+  format: "json-ld"
+

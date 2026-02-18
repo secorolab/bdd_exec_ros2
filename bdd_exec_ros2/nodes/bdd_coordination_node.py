@@ -13,16 +13,25 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-from bdd_dsl.models.urirefs import URI_BHV_PRED_TARGET_OBJ
-from bdd_ros2_interfaces.action import Behaviour
+from typing import Any, Iterable
 import rclpy
 from rclpy.action import ActionClient
 from rclpy.node import Node
 from rclpy.publisher import Publisher
 from rclpy.subscription import Subscription
 from rclpy.executors import ExternalShutdownException
+from rdflib import Dataset, Namespace, URIRef
+from bdd_dsl.models.clauses import WhenBehaviourModel
+from bdd_dsl.models.user_story import UserStoryLoader
+from bdd_dsl.models.urirefs import (
+    URI_BHV_PRED_TARGET_AGN,
+    URI_BHV_PRED_TARGET_OBJ,
+    URI_BHV_TYPE_PICK,
+    URI_BHV_TYPE_PLACE,
+)
+from bdd_dsl.models.variation import get_task_var_dicts
+from bdd_ros2_interfaces.action import Behaviour
 from bdd_ros2_interfaces.msg import Event, ParamValue
-from rdflib import Namespace
 
 
 TEST_NS = Namespace("https://secorolab.github.io/models/test/")
@@ -30,9 +39,84 @@ __DEFAULT_NODE_NAME = "test_coordinator"
 # __SCR_START_EVT_URI = URIRef("https://my.url/models/evt_scr_start")
 
 
+def load_graph_models_in_yaml(models_yml: str) -> Dataset:
+    from pathlib import Path
+    import yaml
+    from rdf_utils.resolver import install_resolver
+
+    yml_p = Path(models_yml)
+
+    if not yml_p.is_file():
+        raise FileNotFoundError(
+            f"YAML listing graph models is not a file: {models_yml}"
+        )
+    with open(yml_p) as yml_f:
+        models_list = yaml.safe_load(yml_f)
+
+    install_resolver()
+
+    g = Dataset()
+    for model_info in models_list:
+        if model_info["format"] == "robbdd":
+            raise ValueError("RobBDD model not yet handled")
+
+        # assuming model can be loaded using rdflib
+        g.parse(model_info["path"], format=model_info["format"])
+
+    return g
+
+
+def get_valid_paramval_message(rel_uri: URIRef, val: Any) -> ParamValue:
+    param = ParamValue()
+    param.param_rel_uri = rel_uri.toPython()
+    if isinstance(val, URIRef):
+        param.param_val_uris = [val.toPython()]
+        return param
+
+    if isinstance(val, Iterable):
+        val_uris = []
+        for uri in val:
+            assert isinstance(uri, URIRef), f"not an Iterable of URIRef: {uri}"
+            val_uris.append(uri.toPython())
+        param.param_val_uris = val_uris
+        return param
+
+    raise RuntimeError(
+        f"get_valid_paramval_message: unhandled types: (type={type(val)}) {val}"
+    )
+
+
+def get_bhv_param_messages(
+    when_bhv: WhenBehaviourModel, var_value_dict: dict[URIRef, Any]
+) -> list[ParamValue]:
+    param_vals = []
+    if URI_BHV_TYPE_PICK or URI_BHV_TYPE_PLACE in when_bhv.types:
+        obj_var_uri = when_bhv.get_attr(URI_BHV_PRED_TARGET_OBJ)
+        assert obj_var_uri is not None
+        assert obj_var_uri in var_value_dict, f"no value for '{obj_var_uri}'"
+        param_vals.append(
+            get_valid_paramval_message(
+                rel_uri=URI_BHV_PRED_TARGET_OBJ, val=var_value_dict[obj_var_uri]
+            )
+        )
+
+        agn_var_uri = when_bhv.get_attr(URI_BHV_PRED_TARGET_AGN)
+        assert agn_var_uri is not None
+        assert agn_var_uri in var_value_dict, f"no value for '{agn_var_uri}'"
+        param_vals.append(
+            get_valid_paramval_message(
+                rel_uri=URI_BHV_PRED_TARGET_AGN, val=var_value_dict[agn_var_uri]
+            )
+        )
+
+    return param_vals
+
+
 class BddCoordNode(Node):
     timeout_sec: float
     server_name: str
+    graph: Dataset
+    us_loader: UserStoryLoader
     _action_client: ActionClient
     _evt_pub: Publisher
     _evt_sub: Subscription
@@ -43,6 +127,7 @@ class BddCoordNode(Node):
 
         self.declare_parameter("bhv_server_name", "bhv_server")
         self.declare_parameter("event_topic", "")
+        self.declare_parameter("graph_models", "")
 
         use_sim_time = self.get_parameter("use_sim_time").value
         self.get_logger().info(f"use_sim_time: {use_sim_time}")
@@ -68,19 +153,31 @@ class BddCoordNode(Node):
             qos_profile=10,
         )
 
+        # Load model graph
+        g_models_yml = self.get_parameter("graph_models").value
+        self.get_logger().info(f"YAML list of graph models: {g_models_yml}")
+        self.graph = load_graph_models_in_yaml(models_yml=g_models_yml)
+        self.us_loader = UserStoryLoader(graph=self.graph, shacl_check=True)
+
     def evt_sub_cb(self, msg: Event):
         self.get_logger().info(f"{msg.stamp.sec}: {msg.uri}")
-        goal_msg = Behaviour.Goal()
-        param = ParamValue()
-        param.param_rel_uri = URI_BHV_PRED_TARGET_OBJ.toPython()
-        param.param_val_uris = [TEST_NS["cube"].toPython()]
-        goal_msg.parameters = [param]
-        self._action_client.wait_for_server(timeout_sec=self.timeout_sec)
-        send_goal_future = self._action_client.send_goal_async(
-            goal_msg, feedback_callback=self.bhv_feedback_cb
-        )
 
-        send_goal_future.add_done_callback(self.bhv_goal_resp_cb)
+        us_var_dict = self.us_loader.get_us_scenario_variants()
+        for scr_var_set in us_var_dict.values():
+            for scr_var_id in scr_var_set:
+                scr_var = self.us_loader.load_scenario_variant(
+                    full_graph=self.graph, variant_id=scr_var_id
+                )
+                var_val_dicts = get_task_var_dicts(scr_var.task_variation)
+                for val_dict in var_val_dicts:
+                    goal_msg = Behaviour.Goal()
+                    goal_msg.parameters = get_bhv_param_messages(
+                        scr_var.when_bhv_model, val_dict
+                    )
+                    send_goal_future = self._action_client.send_goal_async(
+                        goal_msg, feedback_callback=self.bhv_feedback_cb
+                    )
+                    send_goal_future.add_done_callback(callback=self.bhv_goal_resp_cb)
 
     def bhv_goal_resp_cb(self, future):
         goal_handle = future.result()

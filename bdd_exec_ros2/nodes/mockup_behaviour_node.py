@@ -15,12 +15,18 @@
 # limitations under the License.
 import time
 from random import random
+
+from bdd_dsl.models.urirefs import URI_BHV_PRED_TARGET_AGN, URI_BHV_PRED_TARGET_OBJ
+from rdflib import Graph, URIRef
+from rdf_utils.uri import URL_SECORO_M, URL_SECORO_MM
+from coord_dsl.fsm import FSMData, fsm_step, produce_event
+from coord_dsl.event_loop import reconfig_event_buffers
+
 import rclpy
 from rclpy.node import Node
 from rclpy.action import ActionServer, CancelResponse
 from rclpy.executors import ExternalShutdownException
-from coord_dsl.fsm import FSMData, fsm_step, produce_event
-from coord_dsl.event_loop import reconfig_event_buffers
+
 from bdd_ros2_interfaces.msg import Event, Trinary
 from bdd_ros2_interfaces.action import Behaviour
 from bdd_exec_ros2.behaviours.fsm_pickplace import EventID, StateID, create_fsm
@@ -28,6 +34,10 @@ from bdd_exec_ros2.behaviours.fsm_pickplace import EventID, StateID, create_fsm
 
 __DEFAULT_NODE_NAME = "mockup_behaviour"
 # __SCR_START_EVT_URI = URIRef("https://my.url/models/evt_scr_start")
+NS_MANAGER = Graph().namespace_manager
+NS_MANAGER.bind("mm-bhv", f"{URL_SECORO_MM}/behaviour#")
+NS_MANAGER.bind("env-secoro", f"{URL_SECORO_M}/environments/secorolab/")
+NS_MANAGER.bind("agn-isaac", f"{URL_SECORO_M}/agents/isaac-sim/")
 
 
 def random_in_range(lower, upper):
@@ -193,10 +203,23 @@ class MockupBhvNode(Node):
         response = Behaviour.Result()
         feedback = Behaviour.Feedback()
         self.get_logger().info("Received goal:")
+        agn_str = None
+        obj_str = None
         for param_val in goal_handle.request.parameters:
-            self.get_logger().info(f"- Parameter relation: {param_val.param_rel_uri}")
-            for val_uri in param_val.param_val_uris:
-                self.get_logger().info(f"  + Parameter value: {val_uri}")
+            rel_uri = URIRef(param_val.param_rel_uri)
+            self.get_logger().info(f"- Parameter relation: {rel_uri.n3(NS_MANAGER)}")
+
+            val_uris = []
+            for val_uri_str in param_val.param_val_uris:
+                val_uri = URIRef(val_uri_str)
+                val_uris.append(val_uri)
+                self.get_logger().info(f"  + Parameter value: {val_uri.n3(NS_MANAGER)}")
+
+            if rel_uri == URI_BHV_PRED_TARGET_OBJ:
+                obj_str = f"[{', '.join([uri.n3(NS_MANAGER) for uri in val_uris])}]"
+
+            if rel_uri == URI_BHV_PRED_TARGET_AGN:
+                agn_str = f"[{', '.join([uri.n3(NS_MANAGER) for uri in val_uris])}]"
 
         pp_fsm = create_fsm()
         ud = UserData(delay_lower=self.delay_lower, delay_upper=self.delay_upper)
@@ -232,9 +255,7 @@ class MockupBhvNode(Node):
             if heartbeat_timeout < now:
                 while heartbeat_timeout < now:
                     heartbeat_timeout += self.heartbeat_duration
-                feedback.status = (
-                    f"current state: {StateID(pp_fsm.current_state_index).name}"
-                )
+                feedback.status = f"current state: {agn_str} {StateID(pp_fsm.current_state_index).name} {obj_str}"
                 goal_handle.publish_feedback(feedback)
 
             # execute behaviour
