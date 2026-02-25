@@ -16,27 +16,30 @@
 from typing import Any, Iterable
 import rclpy
 from rclpy.action import ActionClient
+from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
 from rclpy.node import Node
 from rclpy.publisher import Publisher
 from rclpy.subscription import Subscription
 from rclpy.executors import ExternalShutdownException
-from rdflib import Dataset, Namespace, URIRef
-from bdd_dsl.models.clauses import WhenBehaviourModel
+from rdflib import Dataset, URIRef
+from bdd_dsl.models.clauses import FluentClauseModel, WhenBehaviourModel
 from bdd_dsl.models.user_story import UserStoryLoader
 from bdd_dsl.models.urirefs import (
     URI_BHV_PRED_TARGET_AGN,
     URI_BHV_PRED_TARGET_OBJ,
     URI_BHV_TYPE_PICK,
     URI_BHV_TYPE_PLACE,
+    URI_OBS_TYPE_POLICY,
 )
 from bdd_dsl.models.variation import get_task_var_dicts
 from bdd_ros2_interfaces.action import Behaviour
-from bdd_ros2_interfaces.msg import Event, ParamValue
+from bdd_ros2_interfaces.msg import Event, ParamValue, TrinaryStamped
+
+from bdd_exec_ros2.observation import ObservationManager
+from bdd_exec_ros2.urirefs import URI_ROS_PRED_MSG_TYPE, URI_ROS_PRED_TOPIC_NAME
 
 
-TEST_NS = Namespace("https://secorolab.github.io/models/test/")
 __DEFAULT_NODE_NAME = "test_coordinator"
-# __SCR_START_EVT_URI = URIRef("https://my.url/models/evt_scr_start")
 
 
 def load_graph_models_in_yaml(models_yml: str) -> Dataset:
@@ -61,7 +64,10 @@ def load_graph_models_in_yaml(models_yml: str) -> Dataset:
             raise ValueError("RobBDD model not yet handled")
 
         # assuming model can be loaded using rdflib
-        g.parse(model_info["path"], format=model_info["format"])
+        try:
+            g.parse(model_info["path"], format=model_info["format"])
+        except Exception as e:
+            raise RuntimeError(f"Caught {e} while processing '{model_info['path']}'")
 
     return g
 
@@ -117,12 +123,19 @@ class BddCoordNode(Node):
     server_name: str
     graph: Dataset
     us_loader: UserStoryLoader
+    _fpolicy_cb_group: MutuallyExclusiveCallbackGroup
+    _fpolicy_by_topics: dict[str, set[URIRef]]
+    _fpolicy_subs: dict[str, Subscription]
     _action_client: ActionClient
     _evt_pub: Publisher
     _evt_sub: Subscription
 
     def __init__(self, node_name: str, timeout_sec: float = 5.0) -> None:
         super().__init__(node_name)
+        self._fpolicy_by_topics = {}
+        self._fpolicy_subs = {}
+        self._fpolicy_cb_group = MutuallyExclusiveCallbackGroup()
+
         self.timeout_sec = timeout_sec
 
         self.declare_parameter("bhv_server_name", "bhv_server")
@@ -159,6 +172,52 @@ class BddCoordNode(Node):
         self.graph = load_graph_models_in_yaml(models_yml=g_models_yml)
         self.us_loader = UserStoryLoader(graph=self.graph, shacl_check=True)
 
+    def load_fluent_obs(self, obs_manager: ObservationManager, fc: FluentClauseModel):
+        if URI_OBS_TYPE_POLICY not in fc.types:
+            self.get_logger().warning(f"no observation policy for fluent {fc.id}")
+            return
+
+        obs_manager.load_fluent_obs(fc=fc, graph=self.graph)
+
+        topic_name = fc.get_attr(key=URI_ROS_PRED_TOPIC_NAME)
+        msg_type = fc.get_attr(key=URI_ROS_PRED_MSG_TYPE)
+        assert (
+            isinstance(topic_name, str) and msg_type is not None
+        ), f"invalid attrs for {fc.id}: topic={topic_name}, msg_type={msg_type}"
+        assert issubclass(
+            msg_type, TrinaryStamped
+        ), "currently only support TrinaryStamped policy assertions"
+
+        if topic_name not in self._fpolicy_by_topics:
+            self._fpolicy_by_topics[topic_name] = set()
+        self._fpolicy_by_topics[topic_name].add(fc.id)
+
+        if topic_name in self._fpolicy_subs:
+            self.get_logger().info(
+                f"not creating new subscription for '{fc.id}' on topic '{topic_name}'"
+            )
+            return
+
+        self._fpolicy_subs[topic_name] = self.create_subscription(
+            msg_type=msg_type,
+            topic=topic_name,
+            callback=lambda msg: self.update_fpolicy_assertion(
+                obs_manager=obs_manager, topic_name=topic_name, msg=msg
+            ),
+            callback_group=self._fpolicy_cb_group,
+            qos_profile=10,
+        )
+
+    def update_fpolicy_assertion(
+        self, obs_manager: ObservationManager, topic_name: str, msg: TrinaryStamped
+    ):
+        assert (
+            topic_name in self._fpolicy_by_topics
+        ), f"no policy registered for topic: {topic_name}"
+        for fpolicy_uri in self._fpolicy_by_topics[topic_name]:
+            self.get_logger().info(f"new assertion for {fpolicy_uri}: {msg}")
+            obs_manager.update_fpolicy_assertion(fc_uri=fpolicy_uri, trinary=msg)
+
     def evt_sub_cb(self, msg: Event):
         self.get_logger().info(f"{msg.stamp.sec}: {msg.uri}")
 
@@ -168,6 +227,10 @@ class BddCoordNode(Node):
                 scr_var = self.us_loader.load_scenario_variant(
                     full_graph=self.graph, variant_id=scr_var_id
                 )
+                obs_manager = ObservationManager()
+                for fc in scr_var.fluent_clauses():
+                    self.load_fluent_obs(obs_manager=obs_manager, fc=fc)
+
                 var_val_dicts = get_task_var_dicts(scr_var.task_variation)
                 for val_dict in var_val_dicts:
                     goal_msg = Behaviour.Goal()

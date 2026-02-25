@@ -33,7 +33,6 @@ from bdd_exec_ros2.behaviours.fsm_pickplace import EventID, StateID, create_fsm
 
 
 __DEFAULT_NODE_NAME = "mockup_behaviour"
-# __SCR_START_EVT_URI = URIRef("https://my.url/models/evt_scr_start")
 NS_M_TMPL = Namespace(f"{URL_SECORO_M}/acceptance-criteria/bdd/templates/")
 NS_M_ENV_SECORO = Namespace(f"{URL_SECORO_M}/environments/secorolab/")
 NS_M_AGN_ISAAC = Namespace(f"{URL_SECORO_M}/agents/isaac-sim/")

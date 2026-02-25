@@ -10,4 +10,5 @@
   format: "json-ld"
 - path:    "https://secorolab.github.io/models/acceptance-criteria/bdd/pickplace-secorolab-isaac.var.json"
   format: "json-ld"
-
+- path:    "https://secorolab.github.io/models/acceptance-criteria/bdd/execution/pickplace-secorolab-ros.obs.json"
+  format: "json-ld"
