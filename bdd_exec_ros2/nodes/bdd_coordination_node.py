@@ -235,9 +235,9 @@ class BddCoordNode(Node):
             del ctx_fc_dict[context_id]
 
     def _update_fpolicy_assertion(self, topic_name: str, msg: TrinaryStamped):
-        assert (
-            topic_name in self._topic_fpolicy_reg
-        ), f"no policy registered for topic: {topic_name}"
+        assert topic_name in self._topic_fpolicy_reg, (
+            f"no policy registered for topic: {topic_name}"
+        )
 
         trin_st = from_trin_stamped_msg(msg)
 
@@ -265,12 +265,12 @@ class BddCoordNode(Node):
 
         topic_name = model.get_attr(key=URI_ROS_PRED_TOPIC_NAME)
         msg_type = model.get_attr(key=URI_ROS_PRED_MSG_TYPE)
-        assert (
-            isinstance(topic_name, str) and msg_type is not None
-        ), f"invalid attrs for {model.id}: topic={topic_name}, msg_type={msg_type}"
-        assert issubclass(
-            msg_type, TrinaryStamped
-        ), "currently only support TrinaryStamped policy assertions"
+        assert isinstance(topic_name, str) and msg_type is not None, (
+            f"invalid attrs for {model.id}: topic={topic_name}, msg_type={msg_type}"
+        )
+        assert issubclass(msg_type, TrinaryStamped), (
+            "currently only support TrinaryStamped policy assertions"
+        )
 
         if topic_name not in self._topic_fpolicy_reg:
             self._topic_fpolicy_reg[topic_name] = {}
@@ -304,10 +304,9 @@ class BddCoordNode(Node):
             scr_var=scr_var,
             obs_loaders=[
                 load_ros_topic_model,
-                lambda graph,
-                model,
-                cid=scr_context_id,
-                **kwargs: self._create_subscription(model=model, context_id=cid),
+                lambda graph, model, cid=scr_context_id, **kwargs: (
+                    self._create_subscription(model=model, context_id=cid)
+                ),
             ],
         )
 
