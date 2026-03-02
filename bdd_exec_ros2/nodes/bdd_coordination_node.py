@@ -13,10 +13,11 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-from typing import Any, Iterable, Optional
+from typing import Any, Optional
 from uuid import UUID, uuid4
 from dataclasses import dataclass
 import threading
+from rdflib import Dataset, URIRef
 
 import rclpy
 from rclpy.action import ActionClient
@@ -29,7 +30,6 @@ from rclpy.executors import ExternalShutdownException
 from rclpy.time import Time
 from std_msgs.msg import Empty as EmptyMsg
 
-from rdflib import Dataset, URIRef
 from rdf_utils.models.common import ModelBase
 from bdd_dsl.models.clauses import WhenBehaviourModel
 from bdd_dsl.models.user_story import ScenarioVariantModel, UserStoryLoader
@@ -43,11 +43,23 @@ from bdd_dsl.models.urirefs import (
 )
 from bdd_dsl.models.variation import get_task_var_dicts
 from bdd_dsl.models.time_constraint import get_duration
-from bdd_dsl.models.observation import ObservationManager
+from bdd_dsl.models.observation import ObservationManager, trin_policy_and
 
 from bdd_ros2_interfaces.action import Behaviour
-from bdd_ros2_interfaces.msg import Event, ParamValue, TrinaryStamped
-from bdd_exec_ros2.observation import from_trin_stamped_msg, load_ros_topic_model
+from bdd_ros2_interfaces.msg import (
+    Event,
+    ParamValue,
+    ScenarioStatus,
+    ScenarioStatusList,
+    TrinaryStamped,
+)
+from bdd_exec_ros2.conversions import (
+    from_trin_stamped_msg,
+    to_fluent_status_msg,
+    to_paramval_message,
+    to_uuid_msg,
+)
+from bdd_exec_ros2.observation import load_ros_topic_model
 from bdd_exec_ros2.urirefs import (
     URI_ROS_PRED_MSG_TYPE,
     URI_ROS_PRED_TOPIC_NAME,
@@ -88,26 +100,6 @@ def load_graph_models_in_yaml(models_yml: str) -> Dataset:
     return g
 
 
-def get_valid_paramval_message(rel_uri: URIRef, val: Any) -> ParamValue:
-    param = ParamValue()
-    param.param_rel_uri = rel_uri.toPython()
-    if isinstance(val, URIRef):
-        param.param_val_uris = [val.toPython()]
-        return param
-
-    if isinstance(val, Iterable):
-        val_uris = []
-        for uri in val:
-            assert isinstance(uri, URIRef), f"not an Iterable of URIRef: {uri}"
-            val_uris.append(uri.toPython())
-        param.param_val_uris = val_uris
-        return param
-
-    raise RuntimeError(
-        f"get_valid_paramval_message: unhandled types: (type={type(val)}) {val}"
-    )
-
-
 def get_bhv_param_messages(
     when_bhv: WhenBehaviourModel, var_value_dict: dict[URIRef, Any]
 ) -> list[ParamValue]:
@@ -117,7 +109,7 @@ def get_bhv_param_messages(
         assert obj_var_uri is not None
         assert obj_var_uri in var_value_dict, f"no value for '{obj_var_uri}'"
         param_vals.append(
-            get_valid_paramval_message(
+            to_paramval_message(
                 rel_uri=URI_BHV_PRED_TARGET_OBJ, val=var_value_dict[obj_var_uri]
             )
         )
@@ -126,7 +118,7 @@ def get_bhv_param_messages(
         assert agn_var_uri is not None
         assert agn_var_uri in var_value_dict, f"no value for '{agn_var_uri}'"
         param_vals.append(
-            get_valid_paramval_message(
+            to_paramval_message(
                 rel_uri=URI_BHV_PRED_TARGET_AGN, val=var_value_dict[agn_var_uri]
             )
         )
@@ -162,6 +154,7 @@ class BddCoordNode(Node):
     _action_client: ActionClient
     _evt_pub: Publisher
     _evt_sub: Subscription
+    _scr_status_pub: Publisher
 
     def __init__(self, node_name: str, timeout_sec: float = 5.0) -> None:
         super().__init__(node_name)
@@ -169,21 +162,26 @@ class BddCoordNode(Node):
 
         self.declare_parameter("bhv_server_name", "bhv_server")
         self.declare_parameter("start_test_topic", "start")
+        self.declare_parameter("status_timer_period", 0.5)
+        self.declare_parameter("status_topic", "status")
         self.declare_parameter("event_topic", "")
         self.declare_parameter("graph_models", "")
 
         use_sim_time = self.get_parameter("use_sim_time").value
         self.get_logger().info(f"use_sim_time: {use_sim_time}")
 
-        # Observation
-        self._topic_fpolicy_reg = {}
-        self._fpolicy_subs = {}
-        self._obs_cb_group = MutuallyExclusiveCallbackGroup()
-
         # Behaviour action server
         server_name = self.get_parameter("bhv_server_name").value
         self.get_logger().info(f"Behaviour server name: {server_name}")
         self._action_client = ActionClient(self, Behaviour, server_name)
+        is_ready = self._action_client.wait_for_server(timeout_sec=self.timeout_sec)
+        if not is_ready:
+            raise RuntimeError(
+                f"Timed out after {self.timeout_sec} secs waiting for server '{server_name}'"
+            )
+
+        # Ensure events and trinaries callbacks are handled in sequence
+        self._obs_cb_group = MutuallyExclusiveCallbackGroup()
 
         # Test starting topic
         start_test_topic = self.get_parameter("start_test_topic").value
@@ -212,6 +210,14 @@ class BddCoordNode(Node):
             qos_profile=10,
         )
 
+        # Timer & publisher for broadcasting scenario status
+        status_topic = self.get_parameter("status_topic").value
+        timer_period = self.get_parameter("status_timer_period").value
+        self.timer = self.create_timer(timer_period, self._status_timer_callback)
+        self._scr_status_pub = self.create_publisher(
+            msg_type=ScenarioStatusList, topic=status_topic, qos_profile=10
+        )
+
         # Load model graph
         g_models_yml = self.get_parameter("graph_models").value
         self.get_logger().info(f"YAML list of graph models: {g_models_yml}")
@@ -221,6 +227,10 @@ class BddCoordNode(Node):
         # Set up context management for executing scenario variants
         self._scenario_contexts = {}
         self._scr_lock = threading.Lock()
+
+        # Observation
+        self._topic_fpolicy_reg = {}  # lock thread before modifying
+        self._fpolicy_subs = {}
 
     def _send_event(self, evt_uri: URIRef) -> None:
         evt_msg = Event()
@@ -337,6 +347,29 @@ class BddCoordNode(Node):
                 future, context_id=cid
             )
         )
+
+    def _status_timer_callback(self):
+        if len(self._scenario_contexts) == 0:
+            # no scenarios
+            return
+
+        now = self.get_clock().now()
+        status_msg = ScenarioStatusList()
+        status_msg.scenarios = []
+
+        for ctx_id, scr_ctx in self._scenario_contexts.items():
+            scr_status = ScenarioStatus()
+            scr_status.context_id = to_uuid_msg(ctx_id)
+            scr_status.fluents = []
+            for fl_tl in scr_ctx.obs_manager.fluent_timelines.values():
+                scr_status.fluents.append(
+                    to_fluent_status_msg(
+                        fluent_tl=fl_tl, now=now, trinaries_policy=trin_policy_and
+                    )
+                )
+            status_msg.scenarios.append(scr_status)
+
+        self._scr_status_pub.publish(status_msg)
 
     def start_test_cb(self, _):
         us_var_dict = self.us_loader.get_us_scenario_variants()

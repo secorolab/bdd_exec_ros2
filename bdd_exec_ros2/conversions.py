@@ -1,0 +1,113 @@
+#!/usr/bin/env python3
+
+# Copyright 2026 Minh Nguyen
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+from typing import Any, Iterable
+from uuid import UUID
+from trinary import Trinary, Unknown
+from rdflib import URIRef
+
+from rclpy.time import Time
+from unique_identifier_msgs.msg import UUID as UUIDMsg
+
+from bdd_dsl.models.observation import (
+    FluentTimeline,
+    TrinariesPolicyProtocol,
+    TrinaryStamped,
+)
+
+from bdd_ros2_interfaces.msg import (
+    FluentStatus,
+    ParamValue,
+    TrinaryStamped as TrinaryStampedMsg,
+    Trinary as TrinaryMsg,
+)
+
+
+def to_uuid_msg(uuid: UUID) -> UUIDMsg:
+    uuid_msg = UUIDMsg()
+    uuid_msg.uuid = bytearray(uuid.bytes)
+    return uuid_msg
+
+
+def from_uuid_msg(uuid_msg: UUIDMsg) -> UUID:
+    return UUID(bytes=bytes(uuid_msg.uuid))
+
+
+def from_trin_stamped_msg(msg: TrinaryStampedMsg) -> TrinaryStamped:
+    epoch_t = Time.from_msg(msg.stamp).to_datetime().timestamp()
+    if msg.trinary.value == TrinaryMsg.FALSE:
+        trin = False
+    elif msg.trinary.value == TrinaryMsg.TRUE:
+        trin = True
+    elif msg.trinary.value == TrinaryMsg.UNKNOWN:
+        trin = Unknown
+    else:
+        raise ValueError(f"Invalid trinary value in ROS message: {msg.trinary.value}")
+
+    return TrinaryStamped(stamp=epoch_t, trinary=trin)
+
+
+def to_trin_msg(trin: Trinary | bool) -> TrinaryMsg:
+    trin_msg = TrinaryMsg()
+    if trin is True:
+        trin_msg.value = TrinaryMsg.TRUE
+    elif trin is False:
+        trin_msg.value = TrinaryMsg.FALSE
+    elif trin is Unknown:
+        trin_msg.value = TrinaryMsg.UNKNOWN
+    else:
+        raise ValueError(f"Invalid trinary value: {trin}")
+    return trin_msg
+
+
+def to_trin_stamped_msg(trin_st: TrinaryStamped) -> TrinaryStampedMsg:
+    trin_st_msg = TrinaryStampedMsg()
+    trin_st_msg.stamp = Time(seconds=trin_st.stamp).to_msg()
+    trin_st_msg.trinary = to_trin_msg(trin_st.trinary)
+    return trin_st_msg
+
+
+def to_paramval_message(rel_uri: URIRef, val: Any) -> ParamValue:
+    param = ParamValue()
+    param.param_rel_uri = rel_uri.toPython()
+    if isinstance(val, URIRef):
+        param.param_val_uris = [val.toPython()]
+        return param
+
+    if isinstance(val, Iterable):
+        val_uris = []
+        for uri in val:
+            assert isinstance(uri, URIRef), f"not an Iterable of URIRef: {uri}"
+            val_uris.append(uri.toPython())
+        param.param_val_uris = val_uris
+        return param
+
+    raise RuntimeError(
+        f"get_valid_paramval_message: unhandled types: (type={type(val)}) {val}"
+    )
+
+
+def to_fluent_status_msg(
+    fluent_tl: FluentTimeline, now: Time, trinaries_policy: TrinariesPolicyProtocol
+) -> FluentStatus:
+    fl_status = FluentStatus()
+    fl_status.trinaries = [
+        to_trin_stamped_msg(trin_st) for trin_st in fluent_tl.trinary_timeline
+    ]
+
+    fl_status.result.stamp = now.to_msg()
+    fl_status.result.trinary = to_trin_msg(trinaries_policy(fluent_tl.trinary_timeline))
+    return fl_status
