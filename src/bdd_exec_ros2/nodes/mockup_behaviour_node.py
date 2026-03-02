@@ -164,9 +164,9 @@ class MockupBhvNode(Node):
 
         self.loop_duration = self.get_parameter("loop_duration").value
         self.heartbeat_duration = self.get_parameter("heartbeat_duration").value
-        assert (
-            self.loop_duration > 0 and self.heartbeat_duration > 0
-        ), f"Negative duration: hearbeat={self.heartbeat_duration}, loop={self.loop_duration}"
+        assert self.loop_duration > 0 and self.heartbeat_duration > 0, (
+            f"Negative duration: hearbeat={self.heartbeat_duration}, loop={self.loop_duration}"
+        )
         assert self.loop_duration * 3 < self.heartbeat_duration, (
             f"Hearbeat duration (hb={self.heartbeat_duration}) must be at least"
             f" 3 times loop duration (loop={self.loop_duration})"
@@ -177,12 +177,12 @@ class MockupBhvNode(Node):
 
         self.delay_lower = self.get_parameter("delay_lower").value
         self.delay_upper = self.get_parameter("delay_upper").value
-        assert (
-            self.delay_lower > 2 * self.heartbeat_duration
-        ), f"Lower range for state delay (lower={self.delay_lower}) must be at least 2 times the hearbheat duration (hb={self.heartbeat_duration})"
-        assert (
-            self.delay_upper > self.delay_lower
-        ), f"Upper range for state delay (upper={self.delay_upper}) must be greater than lower range (lower={self.delay_lower})"
+        assert self.delay_lower > 2 * self.heartbeat_duration, (
+            f"Lower range for state delay (lower={self.delay_lower}) must be at least 2 times the hearbheat duration (hb={self.heartbeat_duration})"
+        )
+        assert self.delay_upper > self.delay_lower, (
+            f"Upper range for state delay (upper={self.delay_upper}) must be greater than lower range (lower={self.delay_lower})"
+        )
         self.get_logger().info(
             f"State duration range: [{self.delay_lower}, {self.delay_upper}]"
         )
