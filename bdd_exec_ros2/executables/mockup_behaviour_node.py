@@ -49,7 +49,7 @@ NS_MANAGER.bind("tmpl", NS_M_TMPL)
 EXPORTED_EVENTS = {
     EventID.E_PICK_APPROACH_START: NS_M_TMPL["evt-pick-start"],
     EventID.E_PICK_APPROACH_DONE: NS_M_TMPL["evt-pick-end"],
-    EventID.E_PLACE_APPROACH_START: NS_M_TMPL["evt-place-start"],
+    EventID.E_PLACE_APPROACH_DONE: NS_M_TMPL["evt-place-start"],
     EventID.E_PLACE_DONE: NS_M_TMPL["evt-place-end"],
 }
 
@@ -281,6 +281,8 @@ class MockupBhvNode(Node):
             response.result.trinary = ud.succeeded
             if pp_fsm.current_state_index == StateID.S_EXIT:
                 goal_handle.succeed()
+                trinary_msg.stamp = self.get_clock().now().to_msg()
+                self.located_place_pub.publish(trinary_msg)
                 return response
 
             if goal_handle.is_cancel_requested:
@@ -303,8 +305,6 @@ class MockupBhvNode(Node):
                 trinary_msg.stamp = self.get_clock().now().to_msg()
                 if pp_fsm.current_state_index == StateID.S_PERCEIVE:
                     self.located_pick_pub.publish(trinary_msg)
-                elif pp_fsm.current_state_index == StateID.S_PLACE:
-                    self.located_place_pub.publish(trinary_msg)
                 elif pp_fsm.current_state_index == StateID.S_APPROACH:
                     if ud.placing:
                         self.is_held_pub.publish(trinary_msg)
