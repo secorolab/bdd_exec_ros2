@@ -38,11 +38,8 @@ from bdd_dsl.models.urirefs import (
     URI_BHV_PRED_TARGET_OBJ,
     URI_BHV_TYPE_PICK,
     URI_BHV_TYPE_PLACE,
-    URI_TIME_PRED_AFTER_EVT,
-    URI_TIME_PRED_BEFORE_EVT,
 )
 from bdd_dsl.models.variation import get_task_var_dicts
-from bdd_dsl.models.time_constraint import get_duration
 from bdd_dsl.models.observation import ObservationManager, trin_policy_and
 
 from bdd_ros2_interfaces.action import Behaviour
@@ -132,8 +129,6 @@ class ScenarioContext:
 
     context_id: UUID
     obs_manager: ObservationManager
-    start_event: URIRef
-    end_event: URIRef
     variation_params: dict[URIRef, Any]
     # Useful for handling timeout, cancelation
     goal_handle: Optional[ClientGoalHandle] = None
@@ -326,18 +321,16 @@ class BddCoordNode(Node):
             ],
         )
 
-        dur = get_duration(scr_var.tmpl)
-        assert URI_TIME_PRED_AFTER_EVT in dur and URI_TIME_PRED_BEFORE_EVT in dur
         context = ScenarioContext(
             context_id=scr_context_id,
             variation_params=val_dict,
-            start_event=dur[URI_TIME_PRED_AFTER_EVT],
-            end_event=dur[URI_TIME_PRED_BEFORE_EVT],
             obs_manager=obs_manager,
         )
 
         # Publish scenario start event
-        self._send_event(evt_uri=context.start_event, ctx_id=scr_context_id)
+        self._send_event(
+            evt_uri=context.obs_manager.scr_start_event, ctx_id=scr_context_id
+        )
 
         goal_msg = Behaviour.Goal()
         goal_msg.scenario_context_id = to_uuid_msg(scr_context_id)
@@ -406,6 +399,12 @@ class BddCoordNode(Node):
             ctx = self._scenario_contexts[evt_ctx_uuid]
             try:
                 ctx.obs_manager.on_event(evt_uri=evt_uri, evt_t=evt_t)
+                # if finished remove from active scenarios
+                if ctx.obs_manager.scr_end_time is not None:
+                    self.get_logger().error(
+                        f"Scenario {ctx.context_id} completed, removing..."
+                    )
+                    del self._scenario_contexts[evt_ctx_uuid]
             except ValueError as e:
                 self.get_logger().error(f"error on_event {ctx.context_id}: {e}")
 
@@ -418,8 +417,9 @@ class BddCoordNode(Node):
         if not goal_handle.accepted:
             self.get_logger().error(f"Goal rejected for {context_id}, removing context")
             with self._scr_lock:
-                self._send_event(evt_uri=ctx.end_event, ctx_id=context_id)
-                del self._scenario_contexts[context_id]
+                self._send_event(
+                    evt_uri=ctx.obs_manager.scr_end_event, ctx_id=context_id
+                )
                 self._remove_context_topic_reg(context_id=context_id)
             return
 
@@ -450,9 +450,9 @@ class BddCoordNode(Node):
                     f"Result callback: context {context_id} not found"
                 )
                 return
-            ctx = self._scenario_contexts.pop(context_id)
+            ctx = self._scenario_contexts[context_id]
             self._remove_context_topic_reg(context_id=context_id)
-            self._send_event(evt_uri=ctx.end_event, ctx_id=context_id)
+            self._send_event(evt_uri=ctx.obs_manager.scr_end_event, ctx_id=context_id)
 
 
 def main(args=None):

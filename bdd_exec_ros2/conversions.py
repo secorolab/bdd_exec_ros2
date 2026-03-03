@@ -116,6 +116,12 @@ def to_scenario_status_msg(
 ) -> ScenarioStatus:
     scr_status = ScenarioStatus()
     scr_status.context_id = to_uuid_msg(ctx_id)
+
+    if obs_manager.scr_start_time is not None:
+        scr_status.start_time = Time(seconds=obs_manager.scr_start_time).to_msg()
+    if obs_manager.scr_end_time is not None:
+        scr_status.end_time = Time(seconds=obs_manager.scr_end_time).to_msg()
+
     now_msg = now.to_msg()
     scr_status.fluents = []
     fluent_results = []
@@ -128,6 +134,10 @@ def to_scenario_status_msg(
 
         fl_status = FluentStatus()
         fl_status.representation = fl_tl.representation
+        if fl_tl.start_time is not None:
+            fl_status.start_time = Time(seconds=fl_tl.start_time).to_msg()
+        if fl_tl.end_time is not None:
+            fl_status.end_time = Time(seconds=fl_tl.end_time).to_msg()
         fl_status.trinaries = [
             to_trin_stamped_msg(trin_st) for trin_st in fl_tl.trinary_timeline
         ]
