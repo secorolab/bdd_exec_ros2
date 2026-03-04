@@ -264,7 +264,7 @@ class BddCoordNode(Node):
             policies = self._topic_fpolicy_reg[topic_name][ctx_uuid]
             for fpolicy_uri in policies:
                 ctx.obs_manager.update_fpolicy_assertion(
-                    fc_uri=fpolicy_uri, trin_st=trin_st
+                    fc_uri=fpolicy_uri, trin_st=trin_st, logger=self.get_logger()
                 )
 
     def _create_subscription(self, model: ModelBase, context_id: UUID):
@@ -358,6 +358,7 @@ class BddCoordNode(Node):
         status_msg.stamp = now.to_msg()
         status_msg.scenarios = []
 
+        finished_ids = set()
         for ctx_id, scr_ctx in self._scenario_contexts.items():
             scr_status = to_scenario_status_msg(
                 ctx_id=ctx_id,
@@ -366,6 +367,15 @@ class BddCoordNode(Node):
                 trinaries_policy=trin_policy_and,
             )
             status_msg.scenarios.append(scr_status)
+
+            # if finished remove from active scenarios
+            if scr_ctx.obs_manager.scr_end_time is not None:
+                finished_ids.add(ctx_id)
+
+        with self._scr_lock:
+            for ctx_id in finished_ids:
+                self.get_logger().info(f"Scenario {ctx_id.hex} completed, removing...")
+                del self._scenario_contexts[ctx_id]
 
         self._scr_status_pub.publish(status_msg)
 
@@ -399,12 +409,6 @@ class BddCoordNode(Node):
             ctx = self._scenario_contexts[evt_ctx_uuid]
             try:
                 ctx.obs_manager.on_event(evt_uri=evt_uri, evt_t=evt_t)
-                # if finished remove from active scenarios
-                if ctx.obs_manager.scr_end_time is not None:
-                    self.get_logger().info(
-                        f"Scenario {ctx.context_id} completed, removing..."
-                    )
-                    del self._scenario_contexts[evt_ctx_uuid]
             except ValueError as e:
                 self.get_logger().error(f"error on_event {ctx.context_id}: {e}")
 
