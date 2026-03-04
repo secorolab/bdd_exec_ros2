@@ -264,7 +264,7 @@ class BddCoordNode(Node):
             policies = self._topic_fpolicy_reg[topic_name][ctx_uuid]
             for fpolicy_uri in policies:
                 ctx.obs_manager.update_fpolicy_assertion(
-                    fc_uri=fpolicy_uri, trin_st=trin_st, logger=self.get_logger()
+                    fc_uri=fpolicy_uri, trin_st=trin_st
                 )
 
     def _create_subscription(self, model: ModelBase, context_id: UUID):
