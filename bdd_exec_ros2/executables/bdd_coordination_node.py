@@ -41,7 +41,14 @@ from bdd_dsl.models.urirefs import (
 )
 from bdd_dsl.models.variation import get_task_var_dicts
 from bdd_dsl.models.observation import ObservationManager, trin_policy_and
-from bdd_dsl.representation import VariableStrTemplate, get_tmpl_fc_is_held, get_tmpl_fc_located_at
+from bdd_dsl.representation import (
+    ClauseRepBuilder,
+    get_str_tc_after_event,
+    get_str_tc_before_event,
+    get_str_tc_during_events,
+    get_tmpl_fc_is_held,
+    get_tmpl_fc_located_at,
+)
 
 from bdd_ros2_interfaces.action import Behaviour
 from bdd_ros2_interfaces.msg import (
@@ -143,7 +150,7 @@ class BddCoordNode(Node):
     _scenario_contexts: dict[UUID, ScenarioContext]
     _scr_lock: threading.Lock
 
-    _variable_templates: dict[URIRef, VariableStrTemplate | None]
+    _clause_rep_builder: ClauseRepBuilder
 
     _obs_cb_group: MutuallyExclusiveCallbackGroup
     _topic_fpolicy_reg: dict[str, dict[UUID, set[URIRef]]]
@@ -226,7 +233,17 @@ class BddCoordNode(Node):
         self._scr_lock = threading.Lock()
         self._topic_fpolicy_reg = {}
         self._scenario_contexts = {}
-        self._variable_templates = {}
+        self._clause_rep_builder = ClauseRepBuilder(
+            tmpl_creators=[
+                get_tmpl_fc_is_held,
+                get_tmpl_fc_located_at,
+            ],
+            tc_str_gens=[
+                get_str_tc_after_event,
+                get_str_tc_before_event,
+                get_str_tc_during_events,
+            ],
+        )
 
         # Observation
         self._fpolicy_subs = {}
@@ -317,11 +334,7 @@ class BddCoordNode(Node):
         obs_manager = ObservationManager.from_scenario_variant(
             graph=self.graph,
             scr_var=scr_var,
-            var_tmpls=self._variable_templates,
-            tmpl_creators=[
-                get_tmpl_fc_is_held,
-                get_tmpl_fc_located_at,
-            ],
+            clause_rep_builder=self._clause_rep_builder,
             val_dict=val_dict,
             obs_loaders=[
                 load_ros_topic_model,

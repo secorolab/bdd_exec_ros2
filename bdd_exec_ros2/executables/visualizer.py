@@ -218,7 +218,9 @@ class BddVisualizer(QMainWindow):
         header.setSectionResizeMode(
             ColumnIdx.SCENARIO_FLUENT.value, QHeaderView.Stretch
         )
-        header.setSectionResizeMode(ColumnIdx.DETAILS.value, QHeaderView.Stretch)
+        header.setSectionResizeMode(
+            ColumnIdx.DETAILS.value, QHeaderView.ResizeToContents
+        )
         header.setSectionResizeMode(
             ColumnIdx.RESULT.value, QHeaderView.ResizeToContents
         )
