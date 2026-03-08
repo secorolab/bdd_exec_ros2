@@ -16,6 +16,7 @@
 import sys
 import signal
 import argparse
+from typing import Optional
 import uuid
 from enum import Enum, auto
 
@@ -204,10 +205,16 @@ class RosWorker(QThread):
 
 
 class TrinaryHistoryDelegate(QStyledItemDelegate):
-    def __init__(self, parent=None, square_size=12, spacing=4):
+    _square_size: int
+    _spacing: int
+
+    def __init__(self, parent=None, font_size: Optional[int] = None):
         super().__init__(parent)
-        self._square_size = square_size
-        self._spacing = spacing
+        if font_size is None:
+            self._square_size = 12
+        else:
+            self._square_size = round(font_size * 1.2)
+        self._spacing = round(self._square_size / 3)
 
     def paint(self, painter, option, index):
         # Retrieve the list of trinary values from the UserRole
@@ -248,7 +255,14 @@ class TrinaryHistoryDelegate(QStyledItemDelegate):
 
 
 class BddVisualizer(QMainWindow):
-    def __init__(self, status_topic: str, width: int, height: int, ros_args):
+    def __init__(
+        self,
+        status_topic: str,
+        width: int,
+        height: int,
+        font_size: Optional[int],
+        ros_args,
+    ):
         super().__init__()
         self.setWindowTitle("BDD Dashboard")
         self.resize(width, height)
@@ -274,7 +288,8 @@ class BddVisualizer(QMainWindow):
             ColumnIdx.DETAILS.value, QHeaderView.ResizeToContents
         )
         self.tree.setItemDelegateForColumn(
-            ColumnIdx.DETAILS.value, TrinaryHistoryDelegate(self.tree)
+            ColumnIdx.DETAILS.value,
+            TrinaryHistoryDelegate(self.tree, font_size=font_size),
         )
         header.setSectionResizeMode(
             ColumnIdx.RESULT.value, QHeaderView.ResizeToContents
@@ -402,7 +417,7 @@ def main():
     parser.add_argument("--width", type=int, default=1000, help="Window width")
     parser.add_argument("--height", type=int, default=600, help="Window height")
     parser.add_argument(
-        "--font-size", type=int, default=10, help="Font size for the UI"
+        "--font-size", type=int, default=None, help="Font size for the UI"
     )
 
     # Parse Known Args
@@ -416,14 +431,19 @@ def main():
     # Launch App
     app = QApplication(sys.argv)
 
-    # Set font size
-    font = app.font()
-    font.setPointSize(args.font_size)
-    app.setFont(font)
+    # Set font size if specified
+    if args.font_size is not None:
+        font = app.font()
+        font.setPointSize(args.font_size)
+        app.setFont(font)
 
     # Create dashboard
     window = BddVisualizer(
-        status_topic=args.topic, width=args.width, height=args.height, ros_args=ros_args
+        status_topic=args.topic,
+        width=args.width,
+        height=args.height,
+        font_size=args.font_size,
+        ros_args=ros_args,
     )
     window.show()
 
