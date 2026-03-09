@@ -9,7 +9,7 @@ launch:
       default: "$(find-pkg-share bdd_exec_ros2)/config/mockup_configs.yaml"
   - arg:
       name: "graph_models"
-      default: "$(find-pkg-share bdd_exec_ros2)/models/pickplace-models.yaml"
+      default: "$(find-pkg-share bdd_exec_ros2)/models/pickplace-models-variations.yaml"
   - node:
       pkg: "bdd_exec_ros2"
       exec: "bdd_coordination_node"
